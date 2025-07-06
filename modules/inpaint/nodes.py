@@ -130,7 +130,9 @@ class PrepareImageAndMaskForInpaint:
         if processed_controlnet_images:
             final_controlnet_tensor = torch.cat(processed_controlnet_images, dim=0)
         else:
-            final_controlnet_tensor = None # No placeholder needed if no CN is input
+            # If no controlnet image is provided, create a black 64x64 placeholder
+            batch_size = image.shape[0]
+            final_controlnet_tensor = torch.zeros((batch_size, 64, 64, 3), dtype=torch.float32, device=image.device)
 
         return (
             torch.cat(images, dim=0),
