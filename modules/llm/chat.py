@@ -8,25 +8,42 @@ from typing import List, Dict, Union, Optional, Any
 
 from ..utils import ensure_package, tensor2pil, pil2base64
 
-gpt_models = [
-    "gpt-3.5-turbo",
-    "gpt-3.5-turbo-16k",
+
+gpt_vision_models = [
     "gpt-4o",
     "gpt-4o-mini",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
     "gpt-4-turbo",
-    "gpt-4-vision-preview",
     "gpt-4-turbo-preview",
-    "gpt-4-0125-preview",
-    "gpt-4-1106-preview",
-    "gpt-4-0613",
-    "gpt-4",
+    "gpt-4-vision-preview",
+    "o1",
+    "o1-mini",
+    "o1-preview",
+    "o1-pro",
+    "o3",
+    "o3-mini",
+    "o3-pro",
+    "o4-mini",
 ]
 
-gpt_vision_models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4-turbo-preview", "gpt-4-vision-preview"]
+gpt_models = [
+    *gpt_vision_models,
+    "gpt-4",
+    "gpt-3.5-turbo",
+    "gpt-3.5-turbo-16k",
+]
+
 
 claude3_models = [
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-20250514",
+    "claude-3-7-sonnet-latest",
+    "claude-3-7-sonnet-20250219",
     "claude-3-5-sonnet-latest",
     "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
     "claude-3-opus-latest",
     "claude-3-opus-20240229",
     "claude-3-sonnet-20240229",
@@ -49,7 +66,11 @@ aws_regions = [
 bedrock_anthropic_versions = ["bedrock-2023-05-31"]
 
 bedrock_claude3_models = [
+    "anthropic.claude-opus-4-20250514-v1:0",
+    "anthropic.claude-sonnet-4-20250514-v1:0",
+    "anthropic.claude-3-7-sonnet-20250219-v1:0",
     "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "anthropic.claude-3-5-haiku-20241022-v1:0",
     "anthropic.claude-3-haiku-20240307-v1:0",
     "anthropic.claude-3-sonnet-20240229-v1:0",
     "anthropic.claude-3-opus-20240229-v1:0",
@@ -84,13 +105,14 @@ class LLMMessageRole(str, Enum):
 class LLMMessage(BaseModel):
     role: LLMMessageRole = LLMMessageRole.user
     text: str
-    image: Optional[str] = None  # base64 enoded image
+    images: Optional[List[str]] = None  # list of base64 encoded images
 
     def to_openai_message(self):
         content = [{"type": "text", "text": self.text}]
 
-        if self.image:
-            content.insert(0, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{self.text}"}})
+        if self.images:
+            for img in self.images:
+                content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
 
         return {
             "role": self.role,
@@ -100,14 +122,14 @@ class LLMMessage(BaseModel):
     def to_claude_message(self):
         content = [{"type": "text", "text": self.text}]
 
-        if self.image:
-            content.insert(
-                0,
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": self.image},
-                },
-            )
+        if self.images:
+            for img in reversed(self.images):
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": img},
+                    }
+                )
 
         return {
             "role": self.role,
@@ -215,7 +237,7 @@ class AwsBedrockMistralApi(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
 
-        ensure_package("boto3", version="1.34.101")
+        ensure_package("boto3", required_version=">=1.34.101")
         import boto3
 
         self.bedrock_runtime = boto3.client(
@@ -261,7 +283,7 @@ class AwsBedrockClaudeApi(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
 
-        ensure_package("boto3", version="1.34.101")
+        ensure_package("boto3", required_version=">=1.34.101")
         import boto3
 
         self.bedrock_runtime = boto3.client(
@@ -360,9 +382,9 @@ class ClaudeApiNode:
 
     def create_api(self, claude_api_key, endpoint, version):
         if not claude_api_key or claude_api_key == "":
-            claude_api_key = os.environ.get("CLAUDE_API_KEY")
+            claude_api_key = os.environ.get("ANTHROPIC_API_KEY", os.environ.get("CLAUDE_API_KEY"))
         if not claude_api_key:
-            raise Exception("Claude API key is required.")
+            raise Exception("Anthropic API key is required.")
 
         return (ClaudeApi(api_key=claude_api_key, endpoint=endpoint, version=version),)
 
@@ -501,9 +523,17 @@ class LLMMessageNode:
                 raise Exception("Only one system prompt is allowed.")
 
         if isinstance(image, Tensor):
-            pil = tensor2pil(image)
-            content = pil2base64(pil)
-            messages.append(LLMMessage(role=role, text=text, image=content))
+            if len(image.shape) == 4:  # Batch of images
+                images = []
+                for i in range(image.shape[0]):
+                    pil = tensor2pil(image[i])
+                    content = pil2base64(pil)
+                    images.append(content)
+                messages.append(LLMMessage(role=role, text=text, images=images))
+            else:  # Single image
+                pil = tensor2pil(image)
+                content = pil2base64(pil)
+                messages.append(LLMMessage(role=role, text=text, images=[content]))
         else:
             messages.append(LLMMessage(role=role, text=text))
 
